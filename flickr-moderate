@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+
+import flickrapi
+import os
+import yaml
+from pprint import pprint
+
+
+def loadConfig():
+    "Get configuration from yaml file"
+    script_dir = os.path.dirname(__file__)
+    with open(script_dir + "/flickr.yaml", 'r') as yamlfile:
+        cfg = yaml.load(yamlfile)
+    return cfg
+
+def auth(api_key, api_secret):
+    "Initialize API connection"
+    flickr = flickrapi.FlickrAPI(api_key, api_secret)
+
+    # authorization tokens are cached so this should only need to be run once on any server
+    if not flickr.token_valid(perms='read'):
+        flickr.get_request_token(oauth_callback='oob')
+        authorize_url = flickr.auth_url(perms='read')
+        print("Enter this URL in your browser: %s" % authorize_url)
+        verifier = str(input('Once approved, enter the verifier code here: '))
+        flickr.get_access_token(verifier)
+
+    return flickr
+
+def isInt(v):
+    "Returns true if the string represents an integer"
+    v = str(v).strip()
+    return v=='0' or (v if v.find('..') > -1 else v.lstrip('-+').rstrip('0').rstrip('.')).isdigit()
+
+def intOrString (string):
+    "If the string represents an integer, returns an integer, otherwise returns the string"
+    if isInt(string): return int(string)
+    else: return string
+
+
+def get_groups (flickr, user_id):
+    "Get all Fav/View groups that we have admin rights on"
+    groups = flickr.people.getGroups(user_id=user_id)
+    views = {}
+    favs = {}
+    for node in groups.iter():
+        group = node.items()
+        if len(group) > 1:
+            info = {'icon': 'https://www.flickr.com/images/buddyicon.gif'}
+            for pair in group:
+                info[pair[0]] = intOrString(pair[1])
+            
+            if info['iconserver'] > 0:
+                info['icon'] = 'http://farm%d.staticflickr.com/%d/buddyicons/%s.jpg' % (info['iconfarm'], info['iconserver'], info['nsid'])
+            
+            if 'Views:' in info['name']:
+                mincount = int(info['name'][6:].replace(',', ''))
+                views[mincount] = info
+            if 'Favorites:' in info['name']:
+                if '&lt;5' in info['name']: mincount = 1
+                else: mincount = int(info['name'][10:].replace(',', ''))
+                favs[mincount] = info
+    return {'views': views, 'favs': favs}
+
+def groupSummaryIcons(groups):
+    "Generate a summary of the various view/fav groups suitable for their description field"
+
+    summary = ["No nudity or pornography allowed!! These pictures ",
+        "will be removed without explaination.\n\n",
+        "In order to keep the pools at a reasonable size, so everybody's ",
+        "pictures can be seen and favorited, please <b>keep each picture ",
+        "in ONLY 1 &quot;Views: <i>xx</i>&quot; and 1 &quot;Favorites: ",
+        "<i>xx</i>&quot; group at a time.</b> (2 groups total for each picture.)\n"]
+
+    summary.append('\n<b>*** Views Groups ***</b>\n')
+
+    for mincount, info in sorted(groups['views'].items()):
+        summary.append('<a href="http://www.flickr.com/groups/views%s/"><img src="%s"></a> '
+            % (mincount, info['icon']))
+
+    summary.append('\n<b>*** Favorites Groups ***</b>\n')
+
+    for mincount, info in sorted(groups['favs'].items()):
+        summary.append('<a href="http://www.flickr.com/groups/favs%s/"><img src="%s"></a> '
+            % (mincount, info['icon']))
+
+    return(''.join(summary))
+
+def groupSummaryDots(groups):
+    "Generate a summary of the various view/fav groups suitable for their description field"
+
+    summary = ["\nNo nudity or pornography allowed!! These pictures ",
+        "will be removed without explaination.\n\n",
+        "In order to keep the pools at a reasonable size, so everybody's ",
+        "pictures can be seen and favorited, please <b>keep each picture ",
+        "in ONLY 1 &quot;Views: <i>xx</i>&quot; and 1 &quot;Favorites: ",
+        "<i>xx</i>&quot; group at a time.</b> (2 groups total for each picture.)\n"]
+
+    max = 0
+    for mincount, info in groups['views'].items():
+        if info['pool_count'] > max: max = info['pool_count']
+
+    summary.append('\n<b>*** Views Groups ***</b>\n')
+
+    for mincount, info in sorted(groups['views'].items()):
+        summary.append('<a href="http://www.flickr.com/groups/views%s/">%s</a> %s %d Photos\n'
+            % (mincount, info['name'], '.' * round(info['pool_count']/max*100), info['pool_count']))
+
+    max = 0
+    for mincount, info in groups['favs'].items():
+        if info['pool_count'] > max: max = info['pool_count']
+
+    summary.append('\n<b>*** Favorites Groups ***</b>\n')
+
+    for mincount, info in sorted(groups['favs'].items()):
+        summary.append('<a href="http://www.flickr.com/groups/favs%s/">%s</a> %s %d Photos\n'
+            % (mincount, info['name'], '.' * round(info['pool_count']/max*100), info['pool_count']))
+
+    return(''.join(summary))
+
+def setGroupDescription(group, summary):
+    "Sets the given group's description to a view/fav line plus the boilerplate summary"
+
+    if "Favorites:" in group['name']:
+        mincount = group['name'][10:]
+        what = 'favorites'
+    elif "Views:" in group['name']:
+        mincount = group['name'][6:]
+        what = 'views'
+
+    text = ''.join({"This group is for any photo with <b>at least %s %s</b> when entering the pool.\n"
+        % (mincount, what), summary})
+
+    pprint(text)
+
+    return
+
+def main():
+    "Main function"
+
+    cfg = loadConfig()
+    flickr = auth(cfg['api_key'],cfg['api_secret'])
+
+    groups = get_groups(flickr, cfg['user_nsid'])
+    #pprint(groups['views'])
+    group_summary = groupSummaryIcons(groups)
+    #print(group_summary)
+
+    # test: API doesn't allow us to change a group's description
+    # will have to try logging in via regular web interface
+    for mincount, info in groups['views'].items():
+        if mincount == 5000000:
+            setGroupDescription(group=info, summary=group_summary)
+
+    # test: does API tell us if group submissions are pending moderation?
+    # there's noting in the group info from a getGroups call
+    # and there's nothing in the output from groups.pools.getPhotos
+    # as above, may need to log in via regular web interface
+    for mincount, info in groups['favs'].items():
+        if mincount == 1250:
+            photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], per_page=25, format='parsed-json')
+            pprint(photos)
+
+
+if __name__ == "__main__":
+    main()
+
+#response = flickr.groups.pools.getPhotos(group_id=u'3773081@N22', per_page=3, format='parsed-json')
+#pprint(response)
