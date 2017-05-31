@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-import flickrapi
-import os
-import yaml
-from pprint import pprint
+import flickrapi            # Flickr API library
+import os                   # get directory of script for config loading
+import yaml                 # config file format
+from pprint import pprint   # for debugging
 
 
 def loadConfig():
@@ -18,11 +18,11 @@ def auth(api_key, api_secret):
     flickr = flickrapi.FlickrAPI(api_key, api_secret)
 
     # authorization tokens are cached so this should only need to be run once on any server
-    if not flickr.token_valid(perms='read'):
+    if not flickr.token_valid(perms='write'):
         flickr.get_request_token(oauth_callback='oob')
-        authorize_url = flickr.auth_url(perms='read')
+        authorize_url = flickr.auth_url(perms='write')
         print("Enter this URL in your browser: %s" % authorize_url)
-        verifier = str(input('Once approved, enter the verifier code here: '))
+        verifier = unicode(raw_input('Verifier code: '))
         flickr.get_access_token(verifier)
 
     return flickr
@@ -39,7 +39,7 @@ def intOrString (string):
 
 
 def get_groups (flickr, user_id):
-    "Get all Fav/View groups that we have admin rights on"
+    "Get all Fav/View groups that we are a member of"
     groups = flickr.people.getGroups(user_id=user_id)
     views = {}
     favs = {}
@@ -89,7 +89,7 @@ def groupSummaryIcons(groups):
 def groupSummaryDots(groups):
     "Generate a summary of the various view/fav groups suitable for their description field"
 
-    summary = ["\nNo nudity or pornography allowed!! These pictures ",
+    summary = ["\n\nNo nudity or pornography allowed!! These pictures ",
         "will be removed without explaination.\n\n",
         "In order to keep the pools at a reasonable size, so everybody's ",
         "pictures can be seen and favorited, please <b>keep each picture ",
@@ -120,6 +120,7 @@ def groupSummaryDots(groups):
 
 def setGroupDescription(group, summary):
     "Sets the given group's description to a view/fav line plus the boilerplate summary"
+    # this function doesn't do anythig. there's no way to set a group's description via the api
 
     if "Favorites:" in group['name']:
         mincount = group['name'][10:]
@@ -128,12 +129,78 @@ def setGroupDescription(group, summary):
         mincount = group['name'][6:]
         what = 'views'
 
-    text = ''.join({"This group is for any photo with <b>at least %s %s</b> when entering the pool.\n"
-        % (mincount, what), summary})
+    text = ''.join(("This group is for any photo with <b>at least %s %s</b> when entering the pool.\n"
+        % (mincount, what), summary))
 
-    pprint(text)
+    #print(text)
 
     return
+
+
+def scanGroups(flickr, groups):
+    "Scans through fav/views groups and removes images that don't qualify"
+
+    prevmin = 9999999999
+    seenphotos = []
+    for mincount, info in sorted(groups['views'].items(), reverse=True):
+        # only work with groups we can invite/reject photos to/from
+        if info['admin']:
+            print('===== %s =====' % info['name'])
+            pages = 1
+            i = 0
+            while i < pages:
+                i=i+1
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,faves,favorites,favs', format='parsed-json')
+                #pprint(photos)
+                pages = photos['photos']['pages']
+                for photo in photos['photos']['photo']:
+                    if int(photo['views']) < mincount:
+                        print("Should not be in this group!! %s" % photo['views'])
+                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                    if int(photo['views']) >= prevmin:
+                        # we can only add photos to a group if the photo is our own
+                        # and the api doesn't have a way to invite a photo to a group
+                        print("Should be in higher group (%s) %s" %
+                            (bestGroup(groups, views=int(photo['views'])),
+                            "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id'])))
+                    # if we've seen this photo before, it must already be in a higher group
+                    if photo['id'] in seenphotos:
+                        print("Photo is already in another view group %s" % photo['id'])
+                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                    else:
+                        seenphotos.append(photo['id'])
+        prevmin = mincount
+        print("Seen photos: %d" % len(seenphotos))
+
+
+    ### now we need to do the same thing with favs
+    ### trouble is, favs are not shown in the getPhotos search so we have to query
+    ### the api for every photo to see how many favs they have
+
+    return
+
+
+def bestGroup(groups, views=-1, favs=-1):
+    "Given a number of views or favorites, will return the name of the best group"
+
+    prevgroup = 'None'
+    if views > 0:
+        for mincount, info in sorted(groups['views'].items()):
+            if views < mincount:
+                return(prevgroup)
+            prevgroup = info['name']
+        return(prevgroup)
+
+    prevgroup = 'None'
+    if favs > 0:
+        for mincount, info in sorted(groups['favs'].items()):
+            if favs < mincount:
+                return(prevgroup)
+            prevgroup = info['name']
+        return(prevgroup)
+
+    # need to specify either views or favs as non-negative a parameter
+    return('None')
 
 def main():
     "Main function"
@@ -143,23 +210,11 @@ def main():
 
     groups = get_groups(flickr, cfg['user_nsid'])
     #pprint(groups['views'])
-    group_summary = groupSummaryIcons(groups)
+
+    #group_summary = groupSummaryIcons(groups)
     #print(group_summary)
 
-    # test: API doesn't allow us to change a group's description
-    # will have to try logging in via regular web interface
-    for mincount, info in groups['views'].items():
-        if mincount == 5000000:
-            setGroupDescription(group=info, summary=group_summary)
-
-    # test: does API tell us if group submissions are pending moderation?
-    # there's noting in the group info from a getGroups call
-    # and there's nothing in the output from groups.pools.getPhotos
-    # as above, may need to log in via regular web interface
-    for mincount, info in groups['favs'].items():
-        if mincount == 1250:
-            photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], per_page=25, format='parsed-json')
-            pprint(photos)
+    scanGroups(flickr, groups)
 
 
 if __name__ == "__main__":
