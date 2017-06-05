@@ -1,67 +1,8 @@
 #!/usr/bin/env python3
 
-import flickrapi            # Flickr API library
-import os                   # get directory of script for config loading
-import yaml                 # config file format
+from common import *        # common function library
 from pprint import pprint   # for debugging
-import re                   # for topic reply  searching
 
-
-def loadConfig():
-    "Get configuration from yaml file"
-    script_dir = os.path.dirname(__file__)
-    with open(script_dir + "/flickr.yaml", 'r') as yamlfile:
-        cfg = yaml.load(yamlfile)
-    return cfg
-
-def auth(api_key, api_secret):
-    "Initialize API connection"
-    flickr = flickrapi.FlickrAPI(api_key, api_secret, format='parsed-json')
-
-    # authorization tokens are cached so this should only need to be run once on any server
-    if not flickr.token_valid(perms='delete'):
-        flickr.get_request_token(oauth_callback='oob')
-        authorize_url = flickr.auth_url(perms='delete')
-        print("Enter this URL in your browser: %s" % authorize_url)
-        verifier = str(input('Verifier code: '))
-        flickr.get_access_token(verifier)
-
-    return flickr
-
-def isInt(v):
-    "Returns true if the string represents an integer"
-    v = str(v).strip()
-    return v=='0' or (v if v.find('..') > -1 else v.lstrip('-+').rstrip('0').rstrip('.')).isdigit()
-
-def intOrString (string):
-    "If the string represents an integer, returns an integer, otherwise returns the string"
-    if isInt(string): return int(string)
-    else: return string
-
-
-def get_groups (flickr, user_id):
-    "Get all Fav/View groups that we are a member of"
-    groups = flickr.people.getGroups(user_id=user_id, format='etree')
-    views = {}
-    favs = {}
-    for node in groups.iter():
-        group = node.items()
-        if len(group) > 1:
-            info = {'icon': 'https://www.flickr.com/images/buddyicon.gif'}
-            for pair in group:
-                info[pair[0]] = intOrString(pair[1])
-            
-            if info['iconserver'] > 0:
-                info['icon'] = 'http://farm%d.staticflickr.com/%d/buddyicons/%s.jpg' % (info['iconfarm'], info['iconserver'], info['nsid'])
-            
-            if 'Views:' in info['name']:
-                mincount = int(info['name'][6:].replace(',', ''))
-                views[mincount] = info
-            if 'Favorites:' in info['name']:
-                if '&lt;5' in info['name']: mincount = 1
-                else: mincount = int(info['name'][10:].replace(',', ''))
-                favs[mincount] = info
-    return {'views': views, 'favs': favs}
 
 def groupSummaryIcons(groups):
     "Generate a summary of the various view/fav groups suitable for their description field"
@@ -138,13 +79,13 @@ def setGroupDescription(group, summary):
     return
 
 
-def scanGroups(flickr, groups):
+def scanGroups(flickr, db, groups):
     "Scans through fav/views groups and removes images that don't qualify"
 
     prevmin = 9999999999
     seenphotos = []
     for mincount, info in sorted(groups['views'].items(), reverse=True):
-        # only work with groups we can invite/reject photos to/from
+        # only work with groups we can administer
         graduates = {}
         if info['admin']:
             print('===== %s =====' % info['name'])
@@ -190,16 +131,62 @@ def scanGroups(flickr, groups):
                         seenphotos.append(photo['id'])
 
             graduatePost(flickr, groups, group=info, photos=graduates)
+            print("Seen photos: %d" % len(seenphotos))
 
         prevmin = mincount
-        print("Seen photos: %d" % len(seenphotos))
 
 
+    prevmin = 9999999999
+    seenphotos = []
+    for mincount, info in sorted(groups['favs'].items(), reverse=True):
+        graduates = {}
+        # only work with groups we can administer
+        if info['admin']:
+            print('===== %s =====' % " ".join(info['name'].split()))
+            pages = 1
+            i = 0
+            while i < pages:
+                i=i+1
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='url_n')
+                pages = photos['photos']['pages']
+                #print('page: %s/%s' % (i, pages))
+                for photo in photos['photos']['photo']:
 
-    ### now we need to do the same thing with favs
-    ### trouble is, favs are not shown in the getPhotos search so we have to query
-    ### the api for every photo to see how many favs they have
+                    # sometimes the url_n url doesn't get set for some reason
+                    # let's construct it manually
+                    if not 'url_n' in photo:
+                        photo['url_n'] = 'https://farm%s.staticflickr.com/%s/%s_%s_n.jpg' % (photo['farm'], photo['server'], photo['id'], photo['secret'])
 
+                    # set favs 
+                    photo['favs'] = getFavs(flickr, db, photo['id'])
+
+                    removed = False
+                    # if it doesn't have enough favs, remove immediately
+                    if photo['favs'] < mincount:
+                        print("Should not be in this group!! %s" % photo['favs'])
+                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removed = True
+
+                    # if we've seen this photo before, it must already be in a higher group
+                    if not removed and photo['id'] in seenphotos:
+                        print('Already in another favs group: %s' %
+                            "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id']))
+                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removed = True
+
+                    # if we haven't seen it before but it has too many favs, add to graduates list
+                    if not removed and photo['favs'] >= prevmin:
+                        graduates[photo['id']] = photo
+
+                    # if we haven't removed the photo, keep track of the ID
+                    if not removed:
+                        seenphotos.append(photo['id'])
+
+            graduatePost(flickr, groups, group=info, photos=graduates)
+            print("Seen photos: %d" % len(seenphotos))
+
+        prevmin = mincount
+                        
     return
 
 
@@ -243,10 +230,11 @@ def graduatePost(flickr, groups, group, photos):
     replies_to_delete = {}
     pages = 1
     i = 0
-    while i < pages:
+    while i <= pages:
         i=i+1
         replies = flickr.groups.discuss.replies.getList(group_id=group['nsid'], topic_id=topic_id, page=i)
         pages = replies['replies']['topic']['pages']
+        #print("page %s/%s" % (i, pages))
         if 'reply' in replies['replies']:
             for reply in replies['replies']['reply']:
                 if reply['message']['_content'] == no_photos_message:
@@ -259,7 +247,12 @@ def graduatePost(flickr, groups, group, photos):
                 else:
                     # extract photo_id out of first url
                     m = re.search(r'/(?P<id>[0-9]+)[\'"]', reply['message']['_content'])
-                    replies_to_delete[m.group('id')] = reply['id']
+                    if m.group('id') in replies_to_delete:
+                        # we have a duplicate photo in replies, delete immediately
+                        print("deleting duplicate reply for %s" % m.group('id'))
+                        resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=reply['id'])
+                    else:
+                        replies_to_delete[m.group('id')] = reply['id']
 
     for photo_id, photo in sorted(photos.items()):
         if photo_id in replies_to_delete:
@@ -291,33 +284,12 @@ def graduatePost(flickr, groups, group, photos):
 
 
 
-def bestGroup(groups, views=-1, favs=-1):
-    "Given a number of views or favorites, will return the name of the best group"
-
-    prevgroup = 'None'
-    if views > 0:
-        for mincount, info in sorted(groups['views'].items()):
-            if views < mincount:
-                return(prevgroup)
-            prevgroup = info
-        return(info)
-
-    prevgroup = 'None'
-    if favs > 0:
-        for mincount, info in sorted(groups['favs'].items()):
-            if favs < mincount:
-                return(prevgroup)
-            prevgroup = info
-        return(info)
-
-    # need to specify either views or favs as non-negative a parameter
-    return('None')
-
 def main():
     "Main function"
 
     cfg = loadConfig()
     flickr = auth(cfg['api_key'],cfg['api_secret'])
+    db = redisAuth(cfg)
 
     groups = get_groups(flickr, cfg['user_nsid'])
     #pprint(groups['views'])
@@ -325,11 +297,9 @@ def main():
     #group_summary = groupSummaryIcons(groups)
     #print(group_summary)
 
-    scanGroups(flickr, groups)
+    scanGroups(flickr, db, groups)
 
 
 if __name__ == "__main__":
     main()
 
-#response = flickr.groups.pools.getPhotos(group_id=u'3773081@N22', per_page=3)
-#pprint(response)

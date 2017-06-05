@@ -1,3 +1,6 @@
 api_key: 34bfc84f9cfe415080cc9f9f6aec2da6
 api_secret: 1fa29800a46b47da
 user_nsid: 37183619@N99
+redis_host: localhost
+redis_port: 6379
+redis_db: 0

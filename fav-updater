@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+from common import *        # general functions
+import redis                # redis db library
+from pprint import pprint   # for debugging
+from time import sleep,time # for pauses
+
+
+def favGroupScan(flickr, db, groups):
+    "Scans through the favorites groups for all the photos to check"
+
+    updated = 0
+    for mincount, info in sorted(groups['favs'].items(), reverse=True):
+        if mincount >= 300:
+            #print('===== %s =====' % info['name'])
+            pages = 1
+            i = 0
+            while i < pages:
+                i=i+1
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='url_n')
+                pages = photos['photos']['pages']
+
+                for photo in photos['photos']['photo']:
+                    if shouldUpdateFavs(db, photo['id']):
+                        updated = updated+1
+                        favs = getFavsFromFlickr(flickr, photo['id'])
+                        saveFavs(db, photo['id'], favs)
+                    #if updated % 50 == 0 and updated != 0:
+                    #    print("favs updated: %s" % updated)
+
+        #print("favs updated: %s" % updated)
+
+    return
+
+
+
+def shouldUpdateFavs(db, photo_id):
+    "returns true when the favorites field should be updated"
+
+    favs = db.hget(photo_id, 'favs')
+    ts   = db.hget(photo_id, 'ts')
+
+    # always update favs if data missing
+    if not favs:
+        return(True)
+
+    # update favs when timestamp is older than an hour
+    if time() > float(ts) + (60*60):
+        return(True)
+
+    return(False)
+
+
+
+
+
+def main():
+    "Main function"
+
+    cfg = loadConfig()
+    flickr = auth(cfg['api_key'], cfg['api_secret'])
+    db = redisAuth(cfg)
+
+    groups = get_groups(flickr, cfg['user_nsid'])
+
+    favGroupScan(flickr, db, groups)
+
+
+
+if __name__ == "__main__":
+    main()
