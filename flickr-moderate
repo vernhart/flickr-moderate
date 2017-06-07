@@ -85,8 +85,9 @@ def scanGroups(flickr, db, groups):
     prevmin = 9999999999
     seenphotos = []
     for mincount, info in sorted(groups['views'].items(), reverse=True):
-        # only work with groups we can administer
         graduates = {}
+        removephotos = {}
+        # only work with groups we can administer
         if info['admin']:
             print('===== %s =====' % info['name'])
             pages = 1
@@ -107,28 +108,29 @@ def scanGroups(flickr, db, groups):
                     # if it doesn't have enough views, remove immediately
                     if int(photo['views']) < mincount:
                         print("Should not be in this group!! %s" % photo['views'])
-                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
                         print("Already in another view group: %s" % 
                             "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id']))
-                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we haven't seen it before but it has too many views, add to graduates list
                     if not removed and int(photo['views']) >= prevmin:
-                        # we can only add photos to a group if the photo is our own
-                        # and the api doesn't have a way to invite a photo to a group
-                        #print("Should be in higher group (%s) %s" %
-                        #    (bestGroup(groups, views=int(photo['views']))['name'],
-                        #    "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id'])))
                         graduates[photo['id']] = photo
 
                     # if we haven't removed the photo, keep track of the ID
                     if not removed:
                         seenphotos.append(photo['id'])
+
+            # now remove all the photos that don't belong
+            for photo_id, group_id in removephotos.items():
+                resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
 
             graduatePost(flickr, groups, group=info, photos=graduates)
             print("Seen photos: %d" % len(seenphotos))
@@ -140,6 +142,7 @@ def scanGroups(flickr, db, groups):
     seenphotos = []
     for mincount, info in sorted(groups['favs'].items(), reverse=True):
         graduates = {}
+        removephotos = {}
         # only work with groups we can administer
         if info['admin']:
             print('===== %s =====' % " ".join(info['name'].split()))
@@ -164,14 +167,16 @@ def scanGroups(flickr, db, groups):
                     # if it doesn't have enough favs, remove immediately
                     if photo['favs'] < mincount:
                         print("Should not be in this group!! %s" % photo['favs'])
-                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
                         print('Already in another favs group: %s' %
                             "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id']))
-                        resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we haven't seen it before but it has too many favs, add to graduates list
@@ -181,6 +186,10 @@ def scanGroups(flickr, db, groups):
                     # if we haven't removed the photo, keep track of the ID
                     if not removed:
                         seenphotos.append(photo['id'])
+
+            # now remove all the photos that don't belong
+            for photo_id, group_id in removephotos.items():
+                resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
 
             graduatePost(flickr, groups, group=info, photos=graduates)
             print("Seen photos: %d" % len(seenphotos))

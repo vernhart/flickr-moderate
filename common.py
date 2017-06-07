@@ -58,10 +58,12 @@ def get_groups (flickr, user_id):
             
             if 'Views:' in info['name']:
                 mincount = int(info['name'][6:].replace(',', ''))
+                info['mincount'] = mincount
                 views[mincount] = info
             if 'Favorites:' in info['name']:
                 if '&lt;5' in info['name']: mincount = 1
                 else: mincount = int(info['name'][10:].replace(',', ''))
+                info['mincount'] = mincount
                 favs[mincount] = info
     return {'views': views, 'favs': favs}
 
@@ -69,24 +71,26 @@ def get_groups (flickr, user_id):
 def bestGroup(groups, views=-1, favs=-1):
     "Given a number of views or favorites, will return the name of the best group"
 
-    prevgroup = 'None'
+    prevgroup = None
     if views > 0:
         for mincount, info in sorted(groups['views'].items()):
             if views < mincount:
+                prevgroup['nextgroup'] = mincount
                 return(prevgroup)
             prevgroup = info
         return(info)
 
-    prevgroup = 'None'
+    prevgroup = None
     if favs > 0:
         for mincount, info in sorted(groups['favs'].items()):
             if favs < mincount:
+                prevgroup['nextgroup'] = mincount
                 return(prevgroup)
             prevgroup = info
         return(info)
 
     # need to specify either views or favs as non-negative a parameter
-    return('None')
+    return(None)
 
 
 
@@ -117,7 +121,7 @@ def getFavsFromFlickr(flickr, photo_id):
     "queries flickr for the photo's info and returns just the favorites"
 
     # pause some time before every query to reduce our impact
-    sleep(0.5) # seconds
+    sleep(0.25) # seconds
 
     info = flickr.photos.getFavorites(photo_id=photo_id, page=1, per_page=1)
 
