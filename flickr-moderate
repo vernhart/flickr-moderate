@@ -94,7 +94,7 @@ def scanGroups(flickr, db, groups):
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,url_n')
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n')
                 #pprint(photos)
                 pages = photos['photos']['pages']
                 for photo in photos['photos']['photo']:
@@ -104,19 +104,18 @@ def scanGroups(flickr, db, groups):
                     if not 'url_n' in photo:
                         photo['url_n'] = 'https://farm%s.staticflickr.com/%s/%s_%s_n.jpg' % (photo['farm'], photo['server'], photo['id'], photo['secret'])
 
+                    photo['url'] = "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id'])
+
                     removed = False
                     # if it doesn't have enough views, remove immediately
                     if int(photo['views']) < mincount:
-                        print("Should not be in this group!! %s" % photo['views'])
-                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        print("Should not be in this group!! %s %s" % (photo['views'], photo['url']))
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
-                        print("Already in another view group: %s" % 
-                            "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id']))
-                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        print("Already in another view group: %s" % photo['url'])
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
@@ -145,12 +144,12 @@ def scanGroups(flickr, db, groups):
         removephotos = {}
         # only work with groups we can administer
         if info['admin']:
-            print('===== %s =====' % " ".join(info['name'].split()))
+            print('----- %s -----' % " ".join(info['name'].split()))
             pages = 1
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='url_n')
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n')
                 pages = photos['photos']['pages']
                 #print('page: %s/%s' % (i, pages))
                 for photo in photos['photos']['photo']:
@@ -160,22 +159,21 @@ def scanGroups(flickr, db, groups):
                     if not 'url_n' in photo:
                         photo['url_n'] = 'https://farm%s.staticflickr.com/%s/%s_%s_n.jpg' % (photo['farm'], photo['server'], photo['id'], photo['secret'])
 
+                    photo['url'] = "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id'])
+
                     # set favs 
-                    photo['favs'] = getFavs(flickr, db, photo['id'])
+                    photo['favs'] = intOrString(photo['count_faves'])
 
                     removed = False
                     # if it doesn't have enough favs, remove immediately
                     if photo['favs'] < mincount:
-                        print("Should not be in this group!! %s" % photo['favs'])
-                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        print("Should not be in this group!! %s %s" % (photo['favs'], photo['url']))
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
-                        print('Already in another favs group: %s' %
-                            "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id']))
-                        #resp = flickr.groups.pools.remove(photo_id=photo['id'], group_id=info['nsid'])
+                        print('Already in another favs group: %s' % photo['url'])
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
@@ -275,7 +273,14 @@ def graduatePost(flickr, groups, group, photos):
             else:
                 # else talk about views groups
                 nextgroup = bestGroup(groups, views=int(photo['views']))
-            print('Posting reply for %s' % photo['id'])
+
+            # attempt to invite the photo to the next group
+            try:
+                resp = flickr.groups.invite.photo.invite(group_id=nextgroup['nsid'], photo_id=photo['id'])
+            except flickrapi.exceptions.FlickrError as err:
+                print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, group['nsid']))
+
+            print('Posting reply for %s' % photo['url'])
             resp = flickr.groups.discuss.replies.add(group_id=group['nsid'], topic_id=topic_id,
                 message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
                     'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
