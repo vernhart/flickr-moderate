@@ -2,6 +2,7 @@
 
 from common import *        # common function library
 from pprint import pprint   # for debugging
+from tendo import singleton # run only one copy
 
 
 def groupSummaryIcons(groups):
@@ -79,7 +80,7 @@ def setGroupDescription(group, summary):
     return
 
 
-def scanGroups(flickr, db, groups):
+def scanGroups(flickr, groups):
     "Scans through fav/views groups and removes images that don't qualify"
 
     prevmin = 9999999999
@@ -87,6 +88,7 @@ def scanGroups(flickr, db, groups):
     for mincount, info in sorted(groups['views'].items(), reverse=True):
         graduates = {}
         removephotos = {}
+        if mincount <= 4000: continue # skip this and lower groups
         # only work with groups we can administer
         if info['admin']:
             print('===== %s =====' % info['name'])
@@ -94,7 +96,7 @@ def scanGroups(flickr, db, groups):
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n')
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,url_n', per_page=500)
                 #pprint(photos)
                 pages = photos['photos']['pages']
                 for photo in photos['photos']['photo']:
@@ -130,6 +132,7 @@ def scanGroups(flickr, db, groups):
             # now remove all the photos that don't belong
             for photo_id, group_id in removephotos.items():
                 resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                pass
 
             graduatePost(flickr, groups, group=info, photos=graduates)
             print("Seen photos: %d" % len(seenphotos))
@@ -142,6 +145,7 @@ def scanGroups(flickr, db, groups):
     for mincount, info in sorted(groups['favs'].items(), reverse=True):
         graduates = {}
         removephotos = {}
+        if mincount <= 150: continue # skip this and lower groups
         # only work with groups we can administer
         if info['admin']:
             print('----- %s -----' % " ".join(info['name'].split()))
@@ -149,7 +153,7 @@ def scanGroups(flickr, db, groups):
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n')
+                photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=500)
                 pages = photos['photos']['pages']
                 #print('page: %s/%s' % (i, pages))
                 for photo in photos['photos']['photo']:
@@ -188,6 +192,7 @@ def scanGroups(flickr, db, groups):
             # now remove all the photos that don't belong
             for photo_id, group_id in removephotos.items():
                 resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                pass
 
             graduatePost(flickr, groups, group=info, photos=graduates)
             print("Seen photos: %d" % len(seenphotos))
@@ -235,11 +240,12 @@ def graduatePost(flickr, groups, group, photos):
 
     no_photos_message = "No photos ready for graduation."
     replies_to_delete = {}
+    extra_replies = []
     pages = 1
     i = 0
     while i <= pages:
         i=i+1
-        replies = flickr.groups.discuss.replies.getList(group_id=group['nsid'], topic_id=topic_id, page=i)
+        replies = flickr.groups.discuss.replies.getList(group_id=group['nsid'], topic_id=topic_id, page=i, per_page=500)
         pages = replies['replies']['topic']['pages']
         #print("page %s/%s" % (i, pages))
         if 'reply' in replies['replies']:
@@ -248,17 +254,24 @@ def graduatePost(flickr, groups, group, photos):
                     if len(photos) > 0:
                         # if the reply is "no photos" but we have photos, delete the reply
                         resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=reply['id'])
+                        pass
                     else:
                         # if we have no photos and the reply is "no photos", do nothing
                         return
                 else:
                     # extract photo_id out of first url
                     m = re.search(r'/(?P<id>[0-9]+)[\'"]', reply['message']['_content'])
-                    if m.group('id') in replies_to_delete:
+                    if m == None:
+                        # if there's no match, remove the reply
+                        extra_replies.append(reply['id'])
+                    elif m.group('id') in replies_to_delete:
                         # we have a duplicate photo in replies, delete immediately
-                        print("deleting duplicate reply for %s" % m.group('id'))
-                        resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=reply['id'])
+                        print("duplicate reply for %s" % m.group('id'))
+                        #resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=reply['id'])
+                        extra_replies.append(reply['id'])
                     else:
+                        # we'll mark them all for deletion
+                        # we'll remove from this list as we go through the photos
                         replies_to_delete[m.group('id')] = reply['id']
 
     for photo_id, photo in sorted(photos.items()):
@@ -277,6 +290,7 @@ def graduatePost(flickr, groups, group, photos):
             # attempt to invite the photo to the next group
             try:
                 resp = flickr.groups.invite.photo.invite(group_id=nextgroup['nsid'], photo_id=photo['id'])
+                pass
             except flickrapi.exceptions.FlickrError as err:
                 print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, group['nsid']))
 
@@ -286,13 +300,24 @@ def graduatePost(flickr, groups, group, photos):
                     'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
                     (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
 
+    for reply_id in extra_replies:
+        print('Deleting extra reply')
+        try:
+            resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=reply_id)
+        except flickrapi.exceptions.FlickrError as err:
+            print('flickrapi.exceptions.FlickrError: {0} {1}'.format(err, reply_id))
+
     for photo_id in replies_to_delete:
         print('Deleting reply for photo_id %s reply_id %s' % (photo_id, replies_to_delete[photo_id]))
-        resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=replies_to_delete[photo_id])
+        try:
+            resp = flickr.groups.discuss.replies.delete(group_id=group['nsid'], topic_id=topic_id, reply_id=replies_to_delete[photo_id])
+        except flickrapi.exceptions.FlickrError as err:
+            print('flickrapi.exceptions.FlickrError: {0} {1}'.format(err, replies_to_delete[photo_id]))
 
     if len(photos) <= 0:
         resp = flickr.groups.discuss.replies.add(group_id=group['nsid'], topic_id=topic_id,
             message=no_photos_message)
+        pass
 
     return
 
@@ -301,9 +326,10 @@ def graduatePost(flickr, groups, group, photos):
 def main():
     "Main function"
 
+    me = singleton.SingleInstance()
+
     cfg = loadConfig()
     flickr = auth(cfg['api_key'],cfg['api_secret'])
-    db = redisAuth(cfg)
 
     groups = get_groups(flickr, cfg['user_nsid'])
     #pprint(groups['views'])
@@ -311,7 +337,7 @@ def main():
     #group_summary = groupSummaryIcons(groups)
     #print(group_summary)
 
-    scanGroups(flickr, db, groups)
+    scanGroups(flickr, groups)
 
 
 if __name__ == "__main__":

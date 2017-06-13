@@ -103,7 +103,7 @@ def redisAuth(cfg):
 
 
 
-def getFavs(flickr, db, photo_id):
+def getFavsFromDB(flickr, db, photo_id):
     "returns the photos favorites count from the db or from flickr"
 
     favs = db.hget(photo_id, 'favs')
@@ -114,18 +114,6 @@ def getFavs(flickr, db, photo_id):
     saveFavs(db, photo_id, favs)
 
     return(favs)
-
-
-
-def getFavsFromFlickr(flickr, photo_id):
-    "queries flickr for the photo's info and returns just the favorites"
-
-    # pause some time before every query to reduce our impact
-    sleep(0.25) # seconds
-
-    info = flickr.photos.getFavorites(photo_id=photo_id, page=1, per_page=1)
-
-    return(intOrString(info['photo']['total']))
 
 
 
