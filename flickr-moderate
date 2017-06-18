@@ -88,13 +88,14 @@ def scanGroups(flickr, groups):
     for mincount, info in sorted(groups['views'].items(), reverse=True):
         graduates = {}
         removephotos = {}
-        if mincount <= 4000: continue # skip this and lower groups
+        seenthisgroup = []
+        if mincount <= 2000: continue # skip this and lower groups
         # only work with groups we can administer
         if info['admin']:
             print('===== %s =====' % info['name'])
             pages = 1
             i = 0
-            while i < pages:
+            while i <= pages:
                 i=i+1
                 photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,url_n', per_page=500)
                 #pprint(photos)
@@ -117,7 +118,7 @@ def scanGroups(flickr, groups):
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
-                        print("Already in another view group: %s" % photo['url'])
+                        print("Already in another view group: %s %s" % (photo['views'],photo['url']))
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
@@ -127,17 +128,21 @@ def scanGroups(flickr, groups):
 
                     # if we haven't removed the photo, keep track of the ID
                     if not removed:
-                        seenphotos.append(photo['id'])
+                        seenthisgroup.append(photo['id'])
 
             # now remove all the photos that don't belong
             for photo_id, group_id in removephotos.items():
-                resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                try:
+                    resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                except flickrapi.exceptions.FlickrError as err:
+                    print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, photo_id))
                 pass
 
             graduatePost(flickr, groups, group=info, photos=graduates)
-            print("Seen photos: %d" % len(seenphotos))
 
         prevmin = mincount
+        seenphotos.extend(seenthisgroup)
+        print("Seen photos: %d total: %d" % (len(seenthisgroup), len(seenphotos)))
 
 
     prevmin = 9999999999
@@ -145,13 +150,14 @@ def scanGroups(flickr, groups):
     for mincount, info in sorted(groups['favs'].items(), reverse=True):
         graduates = {}
         removephotos = {}
-        if mincount <= 150: continue # skip this and lower groups
+        seenthisgroup = []
+        if mincount <= 50: continue # skip this and lower groups
         # only work with groups we can administer
         if info['admin']:
             print('----- %s -----' % " ".join(info['name'].split()))
             pages = 1
             i = 0
-            while i < pages:
+            while i <= pages:
                 i=i+1
                 photos = flickr.groups.pools.getPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=500)
                 pages = photos['photos']['pages']
@@ -177,7 +183,7 @@ def scanGroups(flickr, groups):
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
-                        print('Already in another favs group: %s' % photo['url'])
+                        print('Already in another favs group: %s %s' % (photo['favs'],photo['url']))
                         removephotos[photo['id']] = info['nsid']
                         removed = True
 
@@ -187,17 +193,21 @@ def scanGroups(flickr, groups):
 
                     # if we haven't removed the photo, keep track of the ID
                     if not removed:
-                        seenphotos.append(photo['id'])
+                        seenthisgroup.append(photo['id'])
 
             # now remove all the photos that don't belong
             for photo_id, group_id in removephotos.items():
-                resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                try:
+                    resp = flickr.groups.pools.remove(photo_id=photo_id, group_id=group_id)
+                except flickrapi.exceptions.FlickrError as err:
+                    print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, photo_id))
                 pass
 
             graduatePost(flickr, groups, group=info, photos=graduates)
-            print("Seen photos: %d" % len(seenphotos))
 
         prevmin = mincount
+        seenphotos.extend(seenthisgroup)
+        print("Seen photos: %d total: %d" % (len(seenthisgroup), len(seenphotos)))
                         
     return
 
@@ -210,7 +220,7 @@ def getTopicID(flickr, group_id, subject):
     # search the topics for the given subject
     pages = 1
     i = 0
-    while i < pages:
+    while i <= pages:
         i=i+1
         topics = flickr.groups.discuss.topics.getList(group_id=group_id, page=i)
         pages = topics['topics']['pages']
@@ -218,6 +228,7 @@ def getTopicID(flickr, group_id, subject):
             for topic in topics['topics']['topic']:
                 if topic['subject'] == subject:
                     topic_id = topic['id']
+                    return(topic_id)
     return(topic_id)
 
 
@@ -292,13 +303,16 @@ def graduatePost(flickr, groups, group, photos):
                 resp = flickr.groups.invite.photo.invite(group_id=nextgroup['nsid'], photo_id=photo['id'])
                 pass
             except flickrapi.exceptions.FlickrError as err:
-                print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, group['nsid']))
+                print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, photo['id']))
 
             print('Posting reply for %s' % photo['url'])
-            resp = flickr.groups.discuss.replies.add(group_id=group['nsid'], topic_id=topic_id,
-                message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
-                    'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
-                    (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
+            try:
+                resp = flickr.groups.discuss.replies.add(group_id=group['nsid'], topic_id=topic_id,
+                    message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
+                        'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
+                        (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
+            except flickrapi.exceptions.FlickrError as err:
+                print('flickrapi.execptions.FlickrError: {0} {1}'.format(err, photo['id']))
 
     for reply_id in extra_replies:
         print('Deleting extra reply')
