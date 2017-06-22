@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+
+from common import *        # common function library
+import sys                  # for argv stuff
+import getopt               # command line argumnts
+
+
+def usage():
+    print('Usage: %s [-hvf] <groupcount>' % sys.argv[0])
+    return
+
+def main(argv):
+    "Main function"
+
+    try:
+        opts, args = getopt.getopt(argv, "hvf", ["help", "views", "favs", "faves", "favorites"])
+    except getopt.GetoptError:
+        usage()
+        sys.exit(2)
+
+    checkcounts = []
+    for arg in args:
+        arg = intOrString(arg)
+        if isinstance(arg, int):
+            checkcounts.append(arg)
+    if len(checkcounts) == 0:
+        print("%s requires at least one numeric argument" % sys.argv[0])
+        usage()
+        sys.exit(2)
+
+    cfg = loadConfig()
+    flickr = auth(cfg['api_key'],cfg['api_secret'])
+
+    groups = get_groups(flickr, cfg['user_nsid'])
+
+    for opt, arg in opts:
+        if opt in ('-h', '--help'):
+            usage()
+            sys.exit()
+        elif opt in ('-v', '--view', '--views'):
+            scanGroups(flickr, groups, 'views', checkcounts=checkcounts)
+        elif opt in ('-f', '--favs', '--faves', '--favorites'):
+            scanGroups(flickr, groups, 'favs',  checkcounts=checkcounts)
+        else:
+            print('%s requires either --views or --favs' % sys.argv[0])
+            usage()
+            sys.exit(2)
+
+    #scanGroups(flickr, groups, 'views', checkcounts=[2000])
+    #scanGroups(flickr, groups, 'favs', checkcounts=[50])
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+
