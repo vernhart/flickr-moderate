@@ -6,27 +6,34 @@ import getopt               # command line argumnts
 
 
 def usage():
-    print('Usage: %s [-hvf] <groupcount>' % sys.argv[0])
+    print('Usage: %s [options] [GROUPCOUNT]' % sys.argv[0])
+    print('\nOptions:')
+    print('  -h, --help             Show this help message and exit')
+    print('  -v, --views            Process Views groups')
+    print('  -f, --favs             Process Favorites groups')
+    print('  -n, --noop             Do the scan without any removals, posts, or deletes')
+    print('\nGROUPCOUNT may be repeated to scan multiple groups.')
+    print('If GROUPCOUNT is ommited, all groups of the given type (views or favs) will be scanned.')
     return
 
 def main(argv):
     "Main function"
 
     try:
-        opts, args = getopt.getopt(argv, "hvf", ["help", "views", "favs", "faves", "favorites"])
+        opts, args = getopt.getopt(argv, "hvfn", ["help", "views", "favs", "faves", "favorites", "noop"])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
 
     checkcounts = []
+    testrun = False
+    vieworfav = None
     for arg in args:
         arg = intOrString(arg)
         if isinstance(arg, int):
             checkcounts.append(arg)
     if len(checkcounts) == 0:
-        print("%s requires at least one numeric argument" % sys.argv[0])
-        usage()
-        sys.exit(2)
+        checkcounts = None
 
     cfg = loadConfig()
     flickr = auth(cfg['api_key'],cfg['api_secret'])
@@ -34,20 +41,32 @@ def main(argv):
     groups = get_groups(flickr, cfg['user_nsid'])
 
     for opt, arg in opts:
-        if opt in ('-h', '--help'):
+        if opt in ('-n', '--noop'):
+            print('doing test run')
+            testrun = True
+        elif opt in ('-h', '--help'):
             usage()
             sys.exit()
         elif opt in ('-v', '--view', '--views'):
-            scanGroups(flickr, groups, 'views', checkcounts=checkcounts)
+            vieworfav = 'views'
         elif opt in ('-f', '--favs', '--faves', '--favorites'):
-            scanGroups(flickr, groups, 'favs',  checkcounts=checkcounts)
-        else:
-            print('%s requires either --views or --favs' % sys.argv[0])
-            usage()
-            sys.exit(2)
+            vieworfav = 'favs'
 
-    #scanGroups(flickr, groups, 'views', checkcounts=[2000])
-    #scanGroups(flickr, groups, 'favs', checkcounts=[50])
+    mainstarttime = datetime.now()
+
+    if checkcounts is not None and vieworfav is None:
+        # we gave a checkcount arg but didn't specify -v or -f
+        print('ERROR: %s requires either --views or --favs' % sys.argv[0])
+        usage()
+        sys.exit()
+    elif vieworfav is None:
+        # must give -v or -f
+        usage()
+        sys.exit(2)
+    else:
+        scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts)
+
+    print('Total elapsed time: %58s' % (datetime.now() - mainstarttime))
 
 
 if __name__ == "__main__":
