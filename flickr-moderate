@@ -94,8 +94,10 @@ def main():
 
     groups = get_groups(flickr, cfg['user_nsid'])
 
+    mainstarttime = datetime.now()
     scanGroups(flickr, groups, 'views')
     scanGroups(flickr, groups, 'favs')
+    print('Total elapsed time: %58s' % (datetime.now() - mainstarttime))
 
 
 if __name__ == "__main__":

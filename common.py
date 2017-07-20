@@ -8,14 +8,32 @@ import re                   # for topic reply  searching
 import redis                # redis db library
 from time import sleep,time # for pauses
 from functools import wraps # for decorator functions
+import tempfile             # for lock files
+import os                   # for lock files
+import fcntl                # for lock files
+import requests             # for error handling
+from datetime import datetime # for elasped time
 
+
+global __config
+global __config_loaded
+__config = {}
+__config_loaded = 0
 
 def loadConfig():
     "Get configuration from yaml file"
+    global __config
+    global __config_loaded
     script_dir = os.path.dirname(__file__)
-    with open(script_dir + "/flickr.yaml", 'r') as yamlfile:
-        cfg = yaml.load(yamlfile)
-    return cfg
+    config_file = script_dir + "/flickr.yaml"
+    modtime = os.path.getmtime(config_file)
+    if modtime > __config_loaded:
+        if __config_loaded > 0:
+            print("NOTICE: Reloading Config")
+        __config_loaded = modtime
+        with open(config_file, 'r') as yamlfile:
+            __config = yaml.safe_load(yamlfile)
+    return(__config)
 
 
 def handler(func):
@@ -30,8 +48,17 @@ def handler(func):
                     extra.append(str(arg))
             for kw, arg in kwargs.items():
                 extra.append('%s=%s' % (kw, arg))
-            print('flickrapi.exception.FlickrError: %s %s(%s)' %
+            print('WARNING: flickrapi.exception.FlickrError: %s %s(%s)' %
                 (err, func.__name__, ', '.join(extra)))
+        except requests.exceptions.RequestException as err:
+            print('WARNING: Request Exception during %s, retrying...' % func.__name__)
+            sleep(10)
+            try:
+                resp = func(*args, **kwargs)
+            except exceptions.FlickrError as err:
+                print('WARNING: flickrapi.exception.FlickrError: %s %s' % (err, func.__name__))
+            else:
+                return(resp)
         else:
             return(resp)
     return(handle_exceptions)
@@ -48,9 +75,9 @@ def retry(func, retries=3, failurefatal=True):
                     if failurefatal:
                         raise
                     else:
-                        print('Call to %s failed.' % func.__name__)
+                        print('ERROR: Call to %s failed.' % func.__name__)
                 else:
-                    print('Call to %s failed. Retrying...' % func.__name__)
+                    print('WARNING: Call to %s failed. Retrying...' % func.__name__)
                     # pause before continuing
                     sleep(10)
             else:
@@ -62,7 +89,7 @@ def retry(func, retries=3, failurefatal=True):
                     extra.append(arg)
             for kw, arg in kwargs.items():
                 extra.append('%s=%s'.format(kw, arg))
-            print('Tried too many times (%s). Giving up on %s(%s).' %
+            print('ERROR: Tried too many times (%s). Giving up on %s(%s).' %
                 (retries+1, func.__name__, ', '.join(extra)))
     return(retry_function)
 
@@ -144,7 +171,7 @@ def get_groups (flickr, user_id):
     return {'views': views, 'favs': favs}
 
 
-def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
+def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False):
     "Scans view/fav groups and enforces rules"
 
     checkViews = False
@@ -157,19 +184,17 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
 
     # checkcounts is a list of mincounts that we'll check
     # if it's None, initialize it with all the counts
-    favsLimit = 0
     viewsLimit = 0
     if checkcounts is None:
         checkcounts = groups[vieworfav].keys()
-        # for now we limit the general run. this'll go away when we've automated all the things
-        # these are the lowest groups we're okay running for
-        favsLimit = 35
-        viewsLimit = 2000
+        favsLimit = 0
+        viewsLimit = 300
     else:
+        # these are the lowest groups we're okay running for
         if checkFavs:
-            favsLimit = sorted(checkcounts, reverse=True)[0]
+            favsLimit = sorted(checkcounts)[0]
         else:
-            viewsLimit = sorted(checkcounts, reverse=True)[0]
+            viewsLimit = sorted(checkcounts)[0]
 
     # remove the lower groups under our limits
     #for mincount, info in sorted(groups[vieworfav].items()):
@@ -193,9 +218,19 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
         if checkFavs  and mincount < favsLimit:  return
         if checkViews and mincount < viewsLimit: return
 
+        if not (testrun or skipactions):
+            scanlock = lockScan(vieworfav + str(mincount))
+            if not scanlock['locked']:
+                print("Someone is already scanning %s%s, skipping actions" % (vieworfav, mincount))
+                skipactions = True
+        else:
+            scanlock = {'locked': False}
+
         graduates = {}
         removephotos = {}
         seenthisgroup = []
+
+        starttime = datetime.now()
 
         # only work with groups we can administer
         if info['admin']:
@@ -228,17 +263,29 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
                     # if it doesn't have high enough count, mark for removal
                     if photo['counts'] < mincount:
                         print("Should not be in this group!! %s %s" % (photo['counts'], photo['url']))
-                        removephotos[photo['id']] = info['nsid']
+                        if removeNow:
+                            if not (testrun or skipactions):
+                                resp = flickr.myRemove(photo_id=photo['id'], group_id=info['nsid'])
+                        else:
+                            removephotos[photo['id']] = info['nsid']
                         removed = True
                         if checkFavs and photo['counts'] > 0:
-                            bestgroup = bestGroup(groups, **{vieworfav: photo['counts']})
-                            print('Inviting %s to %s' %(photo['url'], bestgroup['name']))
-                            resp = flickr.myInvite(group_id=bestgroup['nsid'], photo_id=photo['id'])
+                            if allowInvites(photo['owner']):
+                                if not (testrun or skipactions):
+                                    # only invite to lower group if it is within 50% of current group
+                                    if photo['counts'] >= mincount*0.5:
+                                        bestgroup = bestGroup(groups, **{vieworfav: photo['counts']})
+                                        print('Inviting %s to %s' %(photo['url'], bestgroup['name']))
+                                        resp = flickr.myInvite(group_id=bestgroup['nsid'], photo_id=photo['id'])
 
                     # if we've seen this photo before, it must already be in a higher group
                     if not removed and photo['id'] in seenphotos:
                         print('Already in a higher group: %s %s' % (photo['counts'],photo['url']))
-                        removephotos[photo['id']] = info['nsid']
+                        if removeNow:
+                            if not (testrun or skipactions):
+                                resp = flickr.myRemove(photo_id=photo['id'], group_id=info['nsid'])
+                        else:
+                            removephotos[photo['id']] = info['nsid']
                         removed = True
 
                     # if we haven't seen it before but it has a high count, add to graduates list
@@ -256,10 +303,22 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
 
                 graduatePost(flickr, groups, group=info, photos=graduates)
 
+        if scanlock['locked']:
+            unlockScan(scanlock)
+
         prevmin = mincount
         seenphotos.extend(seenthisgroup)
-        print("Seen photos: %d total: %d" % (len(seenthisgroup), len(seenphotos)))
+        print('Seen photos: %6d total: %7d %44s' %
+            (len(seenthisgroup), len(seenphotos), '(Elapsed: %s)' % (datetime.now() - starttime)))
 
+
+
+def allowInvites(ownerid):
+    "Returns false if the owner ID is in the no-invites list"
+
+    # reload config, if necessary 
+    cfg = loadConfig()
+    return(ownerid not in cfg['no_invites'])
 
 
 
@@ -283,8 +342,10 @@ def getTopicID(flickr, group_id, subject):
     return(topic_id)
 
 
-def graduatePost(flickr, groups, group, photos):
+def graduatePost(flickr, groups, group, photos, doDeletes=True):
     "Update topic post about photos that could be moved to the next higher group."
+
+    return
 
     subject = 'Proposed Graduation'
     topic_id = getTopicID(flickr, group_id=group['nsid'], subject=subject)
@@ -336,6 +397,8 @@ def graduatePost(flickr, groups, group, photos):
                         # we'll remove from this list as we go through the photos
                         replies_to_delete[m.group('id')] = reply['id']
 
+    postedOwners = {}
+    maxPostsPerOwner = 5
     for photo_id, photo in sorted(photos.items()):
         if photo_id in replies_to_delete:
             # if photo already posted in replies, remove from delete list
@@ -349,27 +412,40 @@ def graduatePost(flickr, groups, group, photos):
                 # else talk about views groups
                 nextgroup = bestGroup(groups, views=int(photo['views']))
 
-            # invite the photo to the next group
-            resp = flickr.myInvite(group_id=nextgroup['nsid'], photo_id=photo['id'])
+            # set the count to zero, if it's not set
+            if not photo['owner'] in postedOwners:
+                postedOwners[photo['owner']] = 0
 
-            print('Posting reply for %s' % photo['url'])
-            resp = flickr.myAddReply(group_id=group['nsid'], topic_id=topic_id,
-                message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
-                    'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
-                    (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
+            if postedOwners[photo['owner']] <= maxPostsPerOwner:
+                "only post a few per owner per run, to cut down on spamming"
+                
+                if allowInvites(photo['owner']):
+                    # invite the photo to the next group
+                    resp = flickr.myInvite(group_id=nextgroup['nsid'], photo_id=photo['id'])
 
-    for reply_id in extra_replies:
-        print('Deleting extra reply')
-        resp = flickr.myDeleteReply(group_id=group['nsid'], topic_id=topic_id, reply_id=reply_id)
+                    if resp is not None:
+                        if resp['stat'] == 'ok':
+                            postedOwners[photo['owner']] += 1
 
-    for photo_id in replies_to_delete:
-        print('Deleting reply for photo_id %s reply_id %s' % (photo_id, replies_to_delete[photo_id]))
-        resp = flickr.myDeleteReply(group_id=group['nsid'], topic_id=topic_id, reply_id=replies_to_delete[photo_id])
+                print('Posting reply for %s' % photo['url'])
+                resp = flickr.myAddReply(group_id=group['nsid'], topic_id=topic_id,
+                    message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
+                        'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
+                        (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
 
-    if len(photos) <= 0:
+    if doDeletes:
+        for reply_id in sorted(extra_replies):
+            print('Deleting extra reply')
+            resp = flickr.myDeleteReply(group_id=group['nsid'], topic_id=topic_id, reply_id=reply_id)
+
+        for photo_id in sorted(replies_to_delete):
+            print('Deleting reply for photo_id %s reply_id %s' % (photo_id, replies_to_delete[photo_id]))
+            resp = flickr.myDeleteReply(group_id=group['nsid'], topic_id=topic_id, reply_id=replies_to_delete[photo_id])
+
+    replies = flickr.myGetReplies(group_id=group['nsid'], topic_id=topic_id, page=1, per_page=1)
+    if replies['replies']['topic']['total'] == '0':
         resp = flickr.myAddReply(group_id=group['nsid'], topic_id=topic_id,
             message=no_photos_message)
-        pass
 
     return
 
@@ -398,6 +474,37 @@ def bestGroup(groups, views=-1, favs=-1):
 
     # need to specify either views or favs as non-negative a parameter
     return(prevgroup)
+
+
+def lockScan(locktext):
+    "If this lock is in place, we're currently scanning the groups"
+
+    lock = {}
+
+    lock['lockfile'] = os.path.normpath(tempfile.gettempdir() + '/' + 'flickr-moderate-' + locktext)
+    lock['fp'] = open(lock['lockfile'], 'w')
+    lock['fp'].flush()
+    try:
+        fcntl.lockf(lock['fp'], fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        lock['locked'] = False
+        lock['fp'].close()
+    else:
+        lock['locked'] = True
+
+    return(lock)
+
+
+def unlockScan(lock):
+    if not lock['locked']:
+        return
+
+    fcntl.lockf(lock['fp'], fcntl.LOCK_UN)
+    if os.path.isfile(lock['lockfile']):
+        os.unlink(lock['lockfile'])
+
+    return
+    
 
 
 
