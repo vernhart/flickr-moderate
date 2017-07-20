@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+
+
+from common import *        # common function library
+import sys                  # for argv stuff
+import getopt               # command line argumnts
+
+
+def fastScanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None):
+    "Scans view/fav groups and enforces rules"
+    " - only checks the first 500 images"
+    " - only enforces multi-group rule if the photo falls in the first 500 images of each group"
+
+    checkViews = False
+    checkFavs = False
+    if vieworfav == 'views':
+        checkViews = True
+    elif vieworfav == 'favs':
+        checkFavs = True
+    assert checkViews or checkFavs, 'fastScanGroups third parameter must be "veiws" or "favs"'
+
+    # checkcounts is a list of mincounts that we'll check
+    # if it's None, initialize it with all the counts
+    favsLimit = 0
+    viewsLimit = 0
+    if checkcounts is None:
+        checkcounts = groups[vieworfav].keys()
+    else:
+        if checkFavs:
+            favsLimit = sorted(checkcounts)[0]
+        else:
+            viewsLimit = sorted(checkcounts)[0]
+
+    # no view or fav group will ever have more than this mincount
+    prevmin = 9999999999999
+    seenphotos = []
+    for mincount, info in sorted(groups[vieworfav].items(), reverse=True):
+
+        starttime = datetime.now()
+        # save what we're checking in the group object
+        info['vieworfav'] = vieworfav
+
+        # if mincount is not in the list to check, skip the delete actions at the end
+        if mincount not in checkcounts:
+            skipactions = True
+        else:
+            skipactions = False
+
+        if checkFavs  and mincount < favsLimit:  return
+        if checkViews and mincount < viewsLimit: return
+
+        if not (testrun or skipactions):
+            scanlock = lockScan(vieworfav + str(mincount))
+            if not scanlock['locked']:
+                print("Someone is already scanning %s%s, skipping actions" % (vieworfav, mincount))
+                skipactions = True
+        else:
+            scanlock = {'locked': False}
+
+        graduates = {}
+        removephotos = {}
+        seenthisgroup = []
+
+        # only work with groups we can administer
+        if info['admin']:
+            print('----- %s -----' % " ".join(info['name'].split()))
+            photos = flickr.myGetPhotos(group_id=info['nsid'], page=1, extras='views,count_faves,url_n', per_page=500)
+            for photo in photos['photos']['photo']:
+
+                # sometimes the url_n url doesn't get set for some reason
+                # let's construct it manually
+                if not 'url_n' in photo:
+                    photo['url_n'] = 'https://farm%s.staticflickr.com/%s/%s_%s_n.jpg' % (photo['farm'], photo['server'], photo['id'], photo['secret'])
+
+                photo['url'] = "https://www.flickr.com/photos/%s/%s" % (photo['owner'], photo['id'])
+
+                if checkFavs:
+                    # set favs 
+                    photo['favs'] = intOrString(photo['count_faves'])
+                    photo['counts'] = photo['favs']
+
+                # later we'll use 'counts' instead of views or favs
+                if checkViews:
+                    photo['counts'] = intOrString(photo['views'])
+
+                removed = False
+                # if it doesn't have high enough count, mark for removal
+                if photo['counts'] < mincount:
+                    print("Should not be in this group!! %s %s" % (photo['counts'], photo['url']))
+                    removephotos[photo['id']] = info['nsid']
+                    removed = True
+                    if checkFavs and photo['counts'] > 0:
+                        if allowInvites(photo['owner']):
+                            if not (testrun or skipactions):
+                                # only invite to lower group if it is within 50% of current group
+                                if photo['counts'] >= mincount*0.5:
+                                    bestgroup = bestGroup(groups, **{vieworfav: photo['counts']})
+                                    print('Inviting %s to %s' %(photo['url'], bestgroup['name']))
+                                    resp = flickr.myInvite(group_id=bestgroup['nsid'], photo_id=photo['id'])
+
+                # if we've seen this photo before, it must already be in a higher group
+                if not removed and photo['id'] in seenphotos:
+                    print('Already in a higher group: %s %s' % (photo['counts'],photo['url']))
+                    removephotos[photo['id']] = info['nsid']
+                    removed = True
+
+                # if we haven't seen it before but it has a high count, add to graduates list
+                if not removed and photo['counts'] >= prevmin:
+                    graduates[photo['id']] = photo
+
+                # if we haven't removed the photo, keep track of the ID
+                if not removed:
+                    seenthisgroup.append(photo['id'])
+
+        if not (testrun or skipactions):
+            # now remove all the photos that don't belong
+            for photo_id, group_id in removephotos.items():
+                resp = flickr.myRemove(photo_id=photo_id, group_id=group_id)
+
+            graduatePost(flickr, groups, group=info, photos=graduates, doDeletes=False)
+
+        if scanlock['locked']:
+            unlockScan(scanlock)
+
+        prevmin = mincount
+        seenphotos.extend(seenthisgroup)
+        print('Seen photos: %6d total: %7d %44s' % 
+            (len(seenthisgroup), len(seenphotos), '(Elapsed: %s)' % (datetime.now() - starttime)))
+
+
+
+def usage():
+    print('Usage: %s [options] [GROUPCOUNT]' % sys.argv[0])
+    print('\nOptions:')
+    print('  -h, --help             Show this help message and exit')
+    print('  -v, --views            Process Views groups')
+    print('  -f, --favs             Process Favorites groups')
+    print('  -n, --noop             Do the scan without any removals, posts, or deletes')
+    print('\nGROUPCOUNT may be repeated to scan multiple groups.')
+    print('If GROUPCOUNT is ommited, all groups of the given type (views or favs) will be scanned.')
+    print('Absent any arguments, all views and favs groups will be scanned.')
+    return
+
+
+def main(argv):
+    "Main function"
+
+    try:
+        opts, args = getopt.getopt(argv, "hvfn", ["help", "views", "favs", "faves", "favorites", "noop"])
+    except getopt.GetoptError:
+        usage()
+        sys.exit(2)
+
+    checkcounts = []
+    testrun = False
+    vieworfav = None
+    for arg in args:
+        arg = intOrString(arg)
+        if isinstance(arg, int):
+            checkcounts.append(arg)
+    if len(checkcounts) == 0:
+        checkcounts = None
+
+    cfg = loadConfig()
+    flickr = auth(cfg['api_key'],cfg['api_secret'])
+
+    groups = get_groups(flickr, cfg['user_nsid'])
+
+    for opt, arg in opts:
+        if opt in ('-n', '--noop'):
+            print('doing test run')
+            testrun = True
+        elif opt in ('-h', '--help'):
+            usage()
+            sys.exit()
+        elif opt in ('-v', '--view', '--views'):
+            vieworfav = 'views'
+        elif opt in ('-f', '--favs', '--faves', '--favorites'):
+            vieworfav = 'favs'
+
+    mainstarttime = datetime.now()
+
+    if checkcounts is not None and vieworfav is None:
+        # we gave a checkcount arg but didn't specify -v or -f
+        print("if specifying a group to scan, must give -v or -f")
+        usage()
+        sys.exit(2)
+    elif vieworfav is None:
+        print('scanning everything')
+        fastScanGroups(flickr, groups, 'views', testrun=testrun)
+        fastScanGroups(flickr, groups, 'favs',  testrun=testrun)
+
+    else:
+        fastScanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts)
+
+    print('Total elapsed time: %58s' % (datetime.now() - mainstarttime))
+
+
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+
