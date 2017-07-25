@@ -3,6 +3,7 @@
 from common import *        # common function library
 import sys                  # for argv stuff
 import getopt               # command line argumnts
+import string               # for filter in arg sanitizing
 
 
 def usage():
@@ -12,6 +13,8 @@ def usage():
     print('  -v, --views            Process Views groups')
     print('  -f, --favs             Process Favorites groups')
     print('  -n, --noop             Do the scan without any removals, posts, or deletes')
+    print('  -l, --lock=name        Use a lock file to avoid multiple runs of the same process')
+    print('  -p, --pages=N          Only scan the first N pages of the group or groups')
     print('\nGROUPCOUNT may be repeated to scan multiple groups.')
     print('If GROUPCOUNT is ommited, all groups of the given type (views or favs) will be scanned.')
     return
@@ -20,7 +23,8 @@ def main(argv):
     "Main function"
 
     try:
-        opts, args = getopt.getopt(argv, "hvfn", ["help", "views", "favs", "faves", "favorites", "noop"])
+        opts, args = getopt.getopt(argv, "hvfnl:p:", ["help", "views", "favs", "faves", "favorites",
+            "noop", "lock=", "pages="])
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -31,7 +35,8 @@ def main(argv):
     for arg in args:
         arg = intOrString(arg)
         if isinstance(arg, int):
-            checkcounts.append(arg)
+            if arg > 0:
+                checkcounts.append(arg)
     if len(checkcounts) == 0:
         checkcounts = None
 
@@ -39,6 +44,9 @@ def main(argv):
     flickr = auth(cfg['api_key'],cfg['api_secret'])
 
     groups = get_groups(flickr, cfg['user_nsid'])
+
+    lockname = None
+    pages = -1
 
     for opt, arg in opts:
         if opt in ('-n', '--noop'):
@@ -51,6 +59,28 @@ def main(argv):
             vieworfav = 'views'
         elif opt in ('-f', '--favs', '--faves', '--favorites'):
             vieworfav = 'favs'
+        elif opt in ('-l', '--lock'):
+            # limit lockname to just alphanumeric [a-zA-Z0-9]
+            arg = charFilter(arg, string.ascii_letters + string.digits)
+            if arg == '':
+                print('ERROR: lock file name must be alphanumeric')
+                usage()
+                sys.exit(2)
+            lockname = arg
+        elif opt in ('-p', '--pages'):
+            # page must be a positive integer
+            arg = charFilter(arg, string.digits)
+            if arg == '' or arg == '0':
+                print('ERROR: page must be a positive non-zero integer')
+                usage()
+                sys.exit(2)
+            pages = int(arg)
+
+    if lockname is not None:
+        runlock = lockScan(lockname)
+        if not runlock['locked']:
+            #print('We're already running with this lock file, skip run');
+            sys.exit(0)
 
     mainstarttime = datetime.now()
 
@@ -64,7 +94,10 @@ def main(argv):
         usage()
         sys.exit(2)
     else:
-        scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts)
+        scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts, maxpages=pages)
+
+    if lockname is not None:
+        unlockScan(lockname)
 
     print('Total elapsed time: %58s' % (datetime.now() - mainstarttime))
 

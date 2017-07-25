@@ -143,6 +143,13 @@ def intOrString (string):
     if isInt(string): return int(string)
     else: return string
 
+def charFilter(instring, allowed):
+    "return a string with all the un-allowed characters removed"
+    output = ''
+    for c in instring:
+        if c in allowed:
+            output += c
+    return output
 
 def get_groups (flickr, user_id):
     "Get all Fav/View groups that we are a member of"
@@ -171,7 +178,7 @@ def get_groups (flickr, user_id):
     return {'views': views, 'favs': favs}
 
 
-def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False):
+def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False, maxpages=-1):
     "Scans view/fav groups and enforces rules"
 
     checkViews = False
@@ -182,29 +189,27 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
         checkFavs = True
     assert checkViews or checkFavs, 'scanGroups second parameter must be "veiws" or "favs"'
 
+    viewsLimit = 0
+    favsLimit = 0
     # checkcounts is a list of mincounts that we'll check
     # if it's None, initialize it with all the counts
-    viewsLimit = 0
     if checkcounts is None:
         checkcounts = groups[vieworfav].keys()
-        favsLimit = 0
-        viewsLimit = 300
+        if maxpages == -1:
+            viewsLimit = 200
     else:
-        # these are the lowest groups we're okay running for
+        # if the mincounts are provided, only go down to the lowest specified
         if checkFavs:
             favsLimit = sorted(checkcounts)[0]
         else:
             viewsLimit = sorted(checkcounts)[0]
 
-    # remove the lower groups under our limits
-    #for mincount, info in sorted(groups[vieworfav].items()):
-    #    if checkFavs  and mincount < favsLimit:    groups[vieworfav].pop(mincount)
-    #    if checkViews and mincount < viewsLimit:   groups[vieworfav].pop(mincount)
-
     # no view or fav group will ever have more than this mincount
     prevmin = 9999999999999
     seenphotos = []
     for mincount, info in sorted(groups[vieworfav].items(), reverse=True):
+
+        starttime = datetime.now()
 
         # save what we're checking in the group object
         info['vieworfav'] = vieworfav
@@ -230,17 +235,24 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
         removephotos = {}
         seenthisgroup = []
 
-        starttime = datetime.now()
-
         # only work with groups we can administer
         if info['admin']:
             print('----- %s -----' % " ".join(info['name'].split()))
             pages = 1
             i = 0
-            while i <= pages:
+            while i < pages:
                 i=i+1
                 photos = flickr.myGetPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=500)
-                pages = photos['photos']['pages']
+                # use the actual page limit if max is -1 or if the actual is less than the max
+                if maxpages == -1 or photos['photos']['pages'] < maxpages:
+                    #print("~~~~~~ old max: %s" % maxpages)
+                    pages = photos['photos']['pages'] + 1
+                else:
+                    #print(":::::: override pages")
+                    pages = maxpages
+
+                #print('page: %s pages: %s actual pages: %s' % (i, pages, photos['photos']['pages']))
+
                 for photo in photos['photos']['photo']:
 
                     # sometimes the url_n url doesn't get set for some reason
@@ -301,7 +313,12 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
                 for photo_id, group_id in removephotos.items():
                     resp = flickr.myRemove(photo_id=photo_id, group_id=group_id)
 
-                graduatePost(flickr, groups, group=info, photos=graduates)
+                if maxpages == -1:
+                    doDeletes = True
+                else:
+                    doDeletes = False
+
+                graduatePost(flickr, groups, group=info, photos=graduates, doDeletes=doDeletes)
 
         if scanlock['locked']:
             unlockScan(scanlock)
