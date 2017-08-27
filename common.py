@@ -239,10 +239,11 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
         if info['admin']:
             print('----- %s -----' % " ".join(info['name'].split()))
             pages = 1
+            page_size = 500
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.myGetPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=500)
+                photos = flickr.myGetPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=page_size)
                 # use the actual page limit if max is -1 or if the actual is less than the max
                 if maxpages == -1 or photos['photos']['pages'] < maxpages:
                     #print("~~~~~~ old max: %s" % maxpages)
@@ -300,19 +301,45 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
                             removephotos[photo['id']] = info['nsid']
                         removed = True
 
-                    # if we haven't seen it before but it has a high count, add to graduates list
-                    if not removed and photo['counts'] >= prevmin:
-                        graduates[photo['id']] = photo
+                    # skip this for now...
+                    if not (testrun or skipactions) and False:
+                        # if we haven't seen it before but it has a high count, add to graduates list
+                        if not removed and photo['counts'] >= prevmin:
+                            # only add the data we need to reduce memory usage
+                            graduates[photo['id']] = {}
+                            graduates[photo['id']]['owner'] = photo['owner']
+                            graduates[photo['id']]['url']   = photo['url']
+                            graduates[photo['id']]['url_n'] = photo['url_n']
+                            if checkFavs:
+                                graduates[photo['id']]['favs'] = photo['favs']
+                            if checkViews:
+                                graduates[photo['id']]['views'] = photo['views']
 
                     # if we haven't removed the photo, keep track of the ID
                     if not removed:
                         seenthisgroup.append(photo['id'])
 
-            if not (testrun or skipactions):
-                # now remove all the photos that don't belong
-                for photo_id, group_id in removephotos.items():
-                    resp = flickr.myRemove(photo_id=photo_id, group_id=group_id)
+                # if we've got more than 95% of the page_size in removephotos:
+                # remove them and turn back the page iterator 
+                if len(removephotos) > (page_size * 0.95):
+                    if not (testrun or skipactions):
+                        print("Removing %d photos..." % len(removephotos))
+                        # remove those in the lsit
+                        for photo_id, group_id in removephotos.items():
+                            resp = flickr.myRemove(photo_id=photo_id, group_id=group_id)
+                        # turn back the page iterator
+                        i = i - 1
+                    # clear the list
+                    removephotos = {}
 
+            if not (testrun or skipactions):
+                if len(removephotos) > 0:
+                    print("Removing %d photos..." % len(removephotos))
+                    # now remove all the photos that don't belong
+                    for photo_id, group_id in removephotos.items():
+                        resp = flickr.myRemove(photo_id=photo_id, group_id=group_id)
+
+                # only do the deletes in the graduation thread if we're scanning the whole group
                 if maxpages == -1:
                     doDeletes = True
                 else:
@@ -379,13 +406,14 @@ def graduatePost(flickr, groups, group, photos, doDeletes=True):
             topic_id = resp['topic']['id']
 
     no_photos_message = "No photos ready for graduation."
+    per_page = 500
     replies_to_delete = {}
     extra_replies = []
     pages = 1
     i = 0
     while i <= pages:
         i=i+1
-        replies = flickr.myGetReplies(group_id=group['nsid'], topic_id=topic_id, page=i, per_page=500)
+        replies = flickr.myGetReplies(group_id=group['nsid'], topic_id=topic_id, page=i, per_page=page_size)
         pages = replies['replies']['topic']['pages']
         #print("page %s/%s" % (i, pages))
         if 'reply' in replies['replies']:
@@ -438,7 +466,7 @@ def graduatePost(flickr, groups, group, photos, doDeletes=True):
                 
                 if allowInvites(photo['owner']):
                     # invite the photo to the next group
-                    resp = flickr.myInvite(group_id=nextgroup['nsid'], photo_id=photo['id'])
+                    resp = flickr.myInvite(group_id=nextgroup['nsid'], photo_id=photo_id)
 
                     if resp is not None:
                         if resp['stat'] == 'ok':
@@ -448,7 +476,7 @@ def graduatePost(flickr, groups, group, photos, doDeletes=True):
                 resp = flickr.myAddReply(group_id=group['nsid'], topic_id=topic_id,
                     message=('<a href="https://www.flickr.com/photos/%s/%s"><img src="%s"></a> '
                         'Promote to <a href="https://www.flickr.com/groups/%s">%s</a>\n') %
-                        (photo['owner'], photo['id'], photo['url_n'], nextgroup['nsid'], nextgroup['name']))
+                        (photo['owner'], photo_id, photo['url_n'], nextgroup['nsid'], nextgroup['name']))
 
     if doDeletes:
         for reply_id in sorted(extra_replies):
