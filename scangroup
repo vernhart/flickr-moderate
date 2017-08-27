@@ -97,7 +97,7 @@ def main(argv):
         scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts, maxpages=pages)
 
     if lockname is not None:
-        unlockScan(lockname)
+        unlockScan(runlock)
 
     print('Total elapsed time: %58s' % (datetime.now() - mainstarttime))
 
