@@ -20,7 +20,7 @@ global __config_loaded
 __config = {}
 __config_loaded = 0
 
-def loadConfig():
+def loadConfig(debug=False):
     "Get configuration from yaml file"
     global __config
     global __config_loaded
@@ -33,6 +33,9 @@ def loadConfig():
         __config_loaded = modtime
         with open(config_file, 'r') as yamlfile:
             __config = yaml.safe_load(yamlfile)
+    if debug:
+        print("DEBUG: %s Loaded Configuration:" % datetime.now())
+        pprint(__config)
     return(__config)
 
 
@@ -117,17 +120,23 @@ class myflickrapi(FlickrAPI):
     def myInvite(self, *args, **kvargs):      return(self.groups.invite.photo.invite(*args, **kvargs))
 
 
-def auth(api_key, api_secret):
+def auth(api_key, api_secret, debug=False):
     "Initialize API connection"
+
+    if debug: print("DEBUG: %s Before Auth" % datetime.now())
     flickr = myflickrapi(api_key, api_secret, format='parsed-json')
+    if debug: print("DEBUG: %s Object created" % datetime.now())
 
     # authorization tokens are cached so this should only need to be run once on any server
     if not flickr.token_valid(perms='delete'):
+        if debug: print("DEBUG: %s token not valid, requesting another" % datetime.now())
         flickr.get_request_token(oauth_callback='oob')
         authorize_url = flickr.auth_url(perms='delete')
         print("Enter this URL in your browser: %s" % authorize_url)
         verifier = str(input('Verifier code: '))
         flickr.get_access_token(verifier)
+
+    if debug: print("DEBUG: %s After Auth" % datetime.now())
 
     return flickr
 
@@ -151,9 +160,12 @@ def charFilter(instring, allowed):
             output += c
     return output
 
-def get_groups (flickr, user_id):
+def get_groups (flickr, user_id, debug=False):
     "Get all Fav/View groups that we are a member of"
+
+    if debug: print("DEBUG: %s Before GetGroups" % datetime.now())
     groups = flickr.myGetGroups(user_id=user_id, format='etree')
+    if debug: print("DEBUG: %s After GetGroups" % datetime.now())
     views = {}
     favs = {}
     for node in groups.iter():
@@ -178,7 +190,7 @@ def get_groups (flickr, user_id):
     return {'views': views, 'favs': favs}
 
 
-def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False, maxpages=-1):
+def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False, maxpages=-1, redisStore=False):
     "Scans view/fav groups and enforces rules"
 
     checkViews = False
@@ -222,6 +234,10 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
 
         if checkFavs  and mincount < favsLimit:  return
         if checkViews and mincount < viewsLimit: return
+
+        if redisStore and mincount not in checkcounts:
+            print("DEBUG: %s Skipping %s" % (datetime.now(), mincount))
+            continue
 
         if not (testrun or skipactions):
             scanlock = lockScan(vieworfav + str(mincount))
@@ -291,15 +307,27 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
                                         print('Inviting %s to %s' %(photo['url'], bestgroup['name']))
                                         resp = flickr.myInvite(group_id=bestgroup['nsid'], photo_id=photo['id'])
 
-                    # if we've seen this photo before, it must already be in a higher group
-                    if not removed and photo['id'] in seenphotos:
-                        print('Already in a higher group: %s %s' % (photo['counts'],photo['url']))
-                        if removeNow:
-                            if not (testrun or skipactions):
-                                resp = flickr.myRemove(photo_id=photo['id'], group_id=info['nsid'])
-                        else:
-                            removephotos[photo['id']] = info['nsid']
-                        removed = True
+                    if redisStore:
+                        # check to see if the photo is already listed in a higher group
+                        if not removed and photoInHigherGroup(photo['id'],vieworfav,mincount):
+                            print("Already in a higher group: %s %s" % (photo['counts'],photo['url']))
+                            if removeNow:
+                                if not (testrun or skipactions):
+                                    resp = flickr.myRemove(photo_id=photo['id'], group_id=info['nsid'])
+                            else:
+                                removephotos[photo['id']] = info['nsid']
+                            removed = True
+                    else:
+
+                        # if we've seen this photo before, it must already be in a higher group
+                        if not removed and photo['id'] in seenphotos:
+                            print('Already in a higher group: %s %s' % (photo['counts'],photo['url']))
+                            if removeNow:
+                                if not (testrun or skipactions):
+                                    resp = flickr.myRemove(photo_id=photo['id'], group_id=info['nsid'])
+                            else:
+                                removephotos[photo['id']] = info['nsid']
+                            removed = True
 
                     # skip this for now...
                     if not (testrun or skipactions) and False:
@@ -316,7 +344,7 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
                                 graduates[photo['id']]['views'] = photo['views']
 
                     # if we haven't removed the photo, keep track of the ID
-                    if not removed:
+                    if not redisStore and not removed:
                         seenthisgroup.append(photo['id'])
 
                 # if we've got more than 95% of the page_size in removephotos:
@@ -561,6 +589,10 @@ def redisAuth(cfg):
     return(redis.StrictRedis(host=cfg['redis_host'], port=cfg['redis_port'], db=cfg['redis_db']))
 
 
+def photoInHigherGroup(photo_id, vieworfav, mincount):
+    "check if the photo is in a higher group in redis db"
+
+    return(False)
 
 def getFavsFromDB(flickr, db, photo_id):
     "returns the photos favorites count from the db or from flickr"

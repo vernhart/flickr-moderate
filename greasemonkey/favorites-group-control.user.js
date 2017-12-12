@@ -70,7 +70,7 @@ function setPrevNext() {
 }
 
 function checkPrevNext() {
-    if (document.getElementById("myNextLink") === null) {
+    if ((document.getElementById("myPrevLink") === null) && (document.getElementById("myNextLink") === null)) {
         setPrevNext();
     }
     setTimeout(function(){ checkPrevNext(); }, 5000);
