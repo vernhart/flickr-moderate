@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Views Group Control
 // @namespace    http://vern.com/
-// @version      0.2
+// @version      0.3
 // @description  Quickly move back and forth between View groups
 // @author       Vern Hart
 // @match        https://www.flickr.com/groups/views*
