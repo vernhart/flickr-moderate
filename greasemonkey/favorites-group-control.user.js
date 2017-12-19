@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Favorites Group Control
 // @namespace    http://vern.com/
-// @version      0.1
+// @version      0.2
 // @description  Quickly move back and forth between Favorites groups
 // @author       Vern Hart
 // @match        https://www.flickr.com/groups/favs*
