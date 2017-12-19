@@ -17,7 +17,7 @@ function parseLocation(url, inc) {
         25000, 30000
     ];
 
-    numstart = url.indexOf('favs') + 4;
+    numstart = url.indexOf('/favs') + 5;
     numend = url.indexOf('/', numstart);
     endofurl = url.substring(numend, url.length);
     if (numend < 0) {

@@ -17,7 +17,7 @@ function parseLocation(url, inc) {
         2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 8000000
     ];
 
-    numstart = url.indexOf('views') + 5;
+    numstart = url.indexOf('/views') + 6;
     numend = url.indexOf('/', numstart);
     endofurl = url.substring(numend, url.length);
     if (numend < 0) {
