@@ -256,10 +256,11 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
             print('----- %s -----' % " ".join(info['name'].split()))
             pages = 1
             page_size = 500
+            timeout = 300 # 5 min
             i = 0
             while i < pages:
                 i=i+1
-                photos = flickr.myGetPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=page_size)
+                photos = flickr.myGetPhotos(group_id=info['nsid'], page=i, extras='views,count_faves,url_n', per_page=page_size, timeout=timeout)
                 # use the actual page limit if max is -1 or if the actual is less than the max
                 if maxpages == -1 or photos['photos']['pages'] < maxpages:
                     #print("~~~~~~ old max: %s" % maxpages)
