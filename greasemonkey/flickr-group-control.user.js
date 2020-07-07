@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Flickr Group Control
 // @namespace    http://vern.com/
-// @version      0.5
+// @version      0.6
 // @description  Quickly move back and forth between Views/Favorites groups
 // @author       Vern Hart
 // @match        https://www.flickr.com/*
