@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Flickr Group Control
 // @namespace    http://vern.com/
-// @version      0.6
+// @version      0.7
 // @description  Quickly move back and forth between Views/Favorites groups
 // @author       Vern Hart
 // @match        https://www.flickr.com/*
 // @grant        none
+// @updateURL    https://github.com/vernhart/flickr-moderate/blob/master/greasemonkey/flickr-group-control.user.js
 // ==/UserScript==
 
 
@@ -28,15 +29,15 @@ function parseLocation(url, vorf, inc) {
         ];
     }
 
-    numstart = url.indexOf('/'+vorf) + vorf.length + 1;
-    numend = url.indexOf('/', numstart);
-    endofurl = url.substring(numend, url.length);
+    var numstart = url.indexOf('/'+vorf) + vorf.length + 1;
+    var numend = url.indexOf('/', numstart);
+    var endofurl = url.substring(numend, url.length);
     if (numend < 0) {
         numend = url.length;
         endofurl = '';
     }
-    count = parseInt(url.substring(numstart, numend));
-    newindex = counts.indexOf(count) + inc;
+    var count = parseInt(url.substring(numstart, numend));
+    var newindex = counts.indexOf(count) + inc;
     if ((newindex < 0) || (newindex >= counts.length)) {
         return '';
     }
@@ -81,6 +82,7 @@ function setPrevNext(vorf) {
 }
 
 function checkPrevNext() {
+    var vorf;
     // periodically check the url to see if it contains one of our group names
     if (location.href.indexOf('groups/views') >= 0) {
         vorf = "views";
