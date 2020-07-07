@@ -7,6 +7,7 @@
 // @match        https://www.flickr.com/*
 // @grant        none
 // @updateURL    https://github.com/vernhart/flickr-moderate/blob/master/greasemonkey/flickr-group-control.user.js
+// @downloadURL  https://github.com/vernhart/flickr-moderate/blob/master/greasemonkey/flickr-group-control.user.js
 // ==/UserScript==
 
 
