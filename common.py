@@ -190,7 +190,7 @@ def get_groups (flickr, user_id, debug=False):
     return {'views': views, 'favs': favs}
 
 
-def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False, maxpages=-1, redisStore=False):
+def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, removeNow=False, maxpages=-1, redisStore=False, debug=False):
     "Scans view/fav groups and enforces rules"
 
     checkViews = False
@@ -291,7 +291,7 @@ def scanGroups(flickr, groups, vieworfav, testrun=False, checkcounts=None, remov
 
                     removed = False
                     # if it doesn't have high enough count, mark for removal
-                    if photo['counts'] < mincount:
+                    if photo['counts'] < (mincount-1): # XXX: temporarily subtract 1 from mincount because an off-by-one error in the fav count
                         print("Should not be in this group!! %s %s" % (photo['counts'], photo['url']))
                         if removeNow:
                             if not (testrun or skipactions):
@@ -617,3 +617,17 @@ def saveFavs(db, photo_id, favs):
     return
 
 
+##
+## this method approves moderated photos
+##
+# method: flickr.groups.admin.acceptPhoto
+# photo_id: 50016918242
+# group_id: 19952089@N00
+# viewerNSID: 37183619@N00
+# csrf: 1594121985:sur7um9mj6b:86aa6f8a4c91441a0ca09f5b7a7e6ced
+# api_key: c1b516237d2550bd2dc66ddf4b0accb0
+# format: json
+# hermes: 1
+# hermesClient: 1
+# reqId: f4fd48ff
+# nojsoncallback: 1

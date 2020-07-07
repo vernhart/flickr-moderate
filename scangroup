@@ -10,6 +10,7 @@ def usage():
     print('Usage: %s [options] [GROUPCOUNT]' % sys.argv[0])
     print('\nOptions:')
     print('  -h, --help             Show this help message and exit')
+    print('  -d, --debug            Added output for debugging')
     print('  -v, --views            Process Views groups')
     print('  -f, --favs             Process Favorites groups')
     print('  -n, --noop             Do the scan without any removals, posts, or deletes')
@@ -31,6 +32,7 @@ def main(argv):
 
     checkcounts = []
     testrun = False
+    DEBUG = False
     vieworfav = None
     for arg in args:
         arg = intOrString(arg)
@@ -52,6 +54,9 @@ def main(argv):
         if opt in ('-n', '--noop'):
             print('doing test run')
             testrun = True
+        elif opt in ('-d', '--debug'):
+            print('DEBUG on')
+            DEBUG = True
         elif opt in ('-h', '--help'):
             usage()
             sys.exit()
@@ -94,7 +99,7 @@ def main(argv):
         usage()
         sys.exit(2)
     else:
-        scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts, maxpages=pages)
+        scanGroups(flickr, groups, vieworfav, testrun=testrun, checkcounts=checkcounts, maxpages=pages, debug=DEBUG)
 
     if lockname is not None:
         unlockScan(runlock)
