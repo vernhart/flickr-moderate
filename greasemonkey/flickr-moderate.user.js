@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Flickr Moderator Approval
 // @namespace    http://vern.com/
-// @version      0.1
+// @version      0.2
 // @description  Quickly approve photos that meet the views/favs requirements of the group
 // @author       Vern Hart
 // @match        https://www.flickr.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_deleteValue
+// @updateURL    https://github.com/vernhart/flickr-moderate/blob/master/greasemonkey/flickr-moderate.user.js
 // @downloadURL  https://github.com/vernhart/flickr-moderate/blob/master/greasemonkey/flickr-moderate.user.js
 // ==/UserScript==
 
